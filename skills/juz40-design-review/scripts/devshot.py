@@ -25,6 +25,7 @@ VENV = HOME / "venv"
 VENV_PYTHON = VENV / "bin" / "python"
 SESSIONS = HOME / "sessions"
 REQUIREMENTS = ["playwright==1.49.1", "pillow==11.0.0"]
+INSTALLED = HOME / "installed-requirements.txt"
 LOGIN_PATH = re.compile(r"(^|/)(login|signin|sign-in|auth|sso)(/|$)", re.I)
 MAX_ELEMENTS = 2000
 
@@ -155,8 +156,9 @@ def ensure_venv(argv):
     """Перезапускает скрипт внутри окружения со всеми зависимостями."""
     if Path(sys.prefix).resolve() == VENV.resolve():
         return
-    if not VENV_PYTHON.exists():
-        fail("Зависимости не установлены. Запустите: python3 scripts/devshot.py setup")
+    current = INSTALLED.read_text(encoding="utf-8") if INSTALLED.exists() else ""
+    if not VENV_PYTHON.exists() or current != "\n".join(REQUIREMENTS):
+        fail("Зависимости нужно установить или обновить. Запустите: python3 scripts/devshot.py setup")
     os.execv(str(VENV_PYTHON), [str(VENV_PYTHON), str(Path(__file__).resolve()), *argv])
 
 
@@ -188,6 +190,7 @@ def cmd_setup(_args):
     chrome = subprocess.run([str(VENV_PYTHON), "-c", probe], capture_output=True).returncode == 0
     if not chrome:
         subprocess.run([str(VENV_PYTHON), "-m", "playwright", "install", "chromium"], check=True)
+    INSTALLED.write_text("\n".join(REQUIREMENTS), encoding="utf-8")
     emit({"ok": True, "browser": "chrome" if chrome else "chromium", "home": str(HOME)})
 
 
