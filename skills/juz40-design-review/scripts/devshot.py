@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Снимает дев для дизайн-ревью: скрины, значения стилей, вырезки и парные фрагменты.
+"""Снимает дев для дизайн-ревью: скрины, значения стилей и парные фрагменты.
 
 Команды:
   setup                          установить зависимости
   login URL                      открыть окно для входа и сохранить сессию
   capture URL --out DIR --name N снять страницу и значения стилей
-  crop IN OUT --box X,Y,W,H      вырезать область с отступом
   pair DESIGN DEV --out DIR      нарезать макет и дев на парные фрагменты
 
 Каждая команда печатает JSON в stdout.
@@ -99,6 +98,8 @@ EXTRACT_JS = r"""
       tag: tag.toLowerCase(),
       box: [r.left + scrollX, r.top + scrollY, r.width, r.height].map((n) => Math.round(n * 100) / 100),
     };
+    const classes = [...el.classList].slice(0, 8).join(' ');
+    if (classes) item.classes = classes;
     if (text) {
       item.text = text.slice(0, 160);
       item.font = {
@@ -296,15 +297,12 @@ def cmd_capture(args):
             full_page=True,
             animations="disabled",
             caret="hide",
-            mask=[page.locator(s) for s in args.mask],
-            mask_color="#9AA0A6",
         )
         data.update(
             {
                 "url": page.url,
                 "status": response.status if response else None,
                 "viewport": {"width": args.width, "height": args.height, "scale": args.scale},
-                "masked": args.mask,
                 "consoleErrors": console_errors[:20],
             }
         )
@@ -321,48 +319,6 @@ def cmd_capture(args):
             "elements": len(data["elements"]),
             "truncated": data["truncated"],
             "consoleErrors": len(data["consoleErrors"]),
-        }
-    )
-
-
-def parse_box(value):
-    try:
-        x, y, w, h = [float(n) for n in value.split(",")]
-    except ValueError:
-        fail("Укажите область так: --box X,Y,W,H")
-    if w <= 0 or h <= 0:
-        fail("Ширина и высота области должны быть больше 0")
-    return x, y, w, h
-
-
-def cmd_crop(args):
-    from PIL import Image
-
-    x, y, w, h = parse_box(args.box)
-    scale = args.scale
-    with Image.open(args.input) as image:
-        page_w, page_h = image.width / scale, image.height / scale
-        if x >= page_w or y >= page_h or x + w <= 0 or y + h <= 0:
-            fail("Область вне изображения", image={"width": page_w, "height": page_h})
-        left = max(0, x - args.pad)
-        top = max(0, y - args.pad)
-        right = min(page_w, x + w + args.pad)
-        bottom = min(page_h, y + h + args.pad)
-        box = tuple(round(n * scale) for n in (left, top, right, bottom))
-        output = Path(args.output).expanduser()
-        output.parent.mkdir(parents=True, exist_ok=True)
-        image.crop(box).save(output, "PNG", optimize=True)
-    emit(
-        {
-            "file": str(output),
-            "width": round(right - left, 2),
-            "height": round(bottom - top, 2),
-            "highlight": {
-                "x": round(max(x, 0) - left, 2),
-                "y": round(max(y, 0) - top, 2),
-                "w": round(min(x + w, page_w) - max(x, 0), 2),
-                "h": round(min(y + h, page_h) - max(y, 0), 2),
-            },
         }
     )
 
@@ -428,14 +384,6 @@ def build_parser():
     capture.add_argument("--wait-for")
     capture.add_argument("--click", action="append", default=[])
     capture.add_argument("--hover", action="append", default=[])
-    capture.add_argument("--mask", action="append", default=[])
-
-    crop = commands.add_parser("crop")
-    crop.add_argument("input")
-    crop.add_argument("output")
-    crop.add_argument("--box", required=True)
-    crop.add_argument("--scale", type=float, default=2)
-    crop.add_argument("--pad", type=float, default=32)
 
     pair = commands.add_parser("pair")
     pair.add_argument("design")
@@ -450,17 +398,12 @@ def build_parser():
 
 def main():
     argv = sys.argv[1:]
-    # Значение --box может начинаться с минуса, argparse принял бы его за параметр.
-    for index, item in enumerate(argv[:-1]):
-        if item == "--box":
-            argv[index:index + 2] = [f"--box={argv[index + 1]}"]
-            break
     args = build_parser().parse_args(argv)
     if args.command == "setup":
         cmd_setup(args)
         return
     ensure_venv(argv)
-    {"login": cmd_login, "capture": cmd_capture, "crop": cmd_crop, "pair": cmd_pair}[args.command](args)
+    {"login": cmd_login, "capture": cmd_capture, "pair": cmd_pair}[args.command](args)
 
 
 if __name__ == "__main__":
