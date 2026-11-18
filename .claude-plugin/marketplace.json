@@ -1,0 +1,14 @@
+{
+  "name": "juz40-design-review",
+  "owner": {
+    "name": "nurlanartikbaev"
+  },
+  "plugins": [
+    {
+      "name": "juz40-design-review",
+      "source": "./",
+      "description": "Сверяет дев с макетом в Figma и собирает расхождения скринами в workspace пользователя",
+      "version": "1.0.0"
+    }
+  ]
+}
