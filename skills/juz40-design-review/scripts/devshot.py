@@ -26,7 +26,7 @@ VENV_PYTHON = VENV / "bin" / "python"
 SESSIONS = HOME / "sessions"
 REQUIREMENTS = ["playwright==1.49.1", "pillow==11.0.0"]
 INSTALLED = HOME / "installed-requirements.txt"
-LOGIN_PATH = re.compile(r"(^|/)(login|signin|sign-in|auth|sso)(/|$)", re.I)
+LOGIN_PATH = re.compile(r"(^|/)(login|signin|sign-in|auth|sso)(/|\?|$)", re.I)
 MAX_ELEMENTS = 2000
 
 EXTRACT_JS = r"""
@@ -54,7 +54,7 @@ EXTRACT_JS = r"""
   const selector = (el) => {
     const parts = [];
     let node = el;
-    while (node && node !== document.body && parts.length < 4) {
+    while (node && node !== document.body && parts.length < 5) {
       const testId = node.getAttribute('data-testid');
       if (testId) { parts.unshift(`[data-testid="${testId}"]`); break; }
       if (node.id) { parts.unshift('#' + node.id); break; }
@@ -63,10 +63,23 @@ EXTRACT_JS = r"""
         ? [...node.parentElement.children].filter((c) => c.tagName === node.tagName)
         : [];
       parts.unshift(same.length > 1 ? `${tag}:nth-of-type(${same.indexOf(node) + 1})` : tag);
+      // Путь начинается от ближайшего компонента Angular.
+      if (tag.includes('-') && parts.length > 1) break;
       node = node.parentElement;
     }
     return parts.join(' > ');
   };
+  const componentHosts = (el) => {
+    const hosts = [];
+    let node = el;
+    while (node && node !== document.body && hosts.length < 3) {
+      const tag = node.tagName.toLowerCase();
+      if (tag.includes('-')) hosts.push(tag);
+      node = node.parentElement;
+    }
+    return hosts;
+  };
+  const ANGULAR_STATE_CLASS = /^ng-(star-inserted|untouched|touched|pristine|dirty|valid|invalid|pending|submitted|animating|trigger(-.*)?|tns-.*)$/;
   const sides = (s, prop) => {
     const v = ['Top', 'Right', 'Bottom', 'Left'].map((d) => parseFloat(s[prop + d]) || 0);
     return v.some(Boolean) ? v : null;
@@ -99,8 +112,11 @@ EXTRACT_JS = r"""
       tag: tag.toLowerCase(),
       box: [r.left + scrollX, r.top + scrollY, r.width, r.height].map((n) => Math.round(n * 100) / 100),
     };
-    const classes = [...el.classList].slice(0, 8).join(' ');
+    const classes = [...el.classList].filter((c) => !ANGULAR_STATE_CLASS.test(c)).slice(0, 8).join(' ');
     if (classes) item.classes = classes;
+    const components = componentHosts(el);
+    if (components.length) item.components = components;
+    if (el.closest('.cdk-overlay-container')) item.overlay = true;
     if (text) {
       item.text = text.slice(0, 160);
       item.font = {
@@ -130,7 +146,9 @@ EXTRACT_JS = r"""
     if (el.disabled) item.disabled = true;
     elements.push(item);
   }
+  const angularRoot = document.querySelector('[ng-version]');
   return {
+    framework: angularRoot ? { name: 'angular', version: angularRoot.getAttribute('ng-version') } : null,
     page: {
       width: document.documentElement.scrollWidth,
       height: document.documentElement.scrollHeight,
@@ -231,7 +249,16 @@ def cmd_login(args):
 
 def settle(page, timeout_ms):
     try:
-        page.wait_for_load_state("networkidle", timeout=timeout_ms)
+        page.wait_for_load_state("networkidle", timeout=min(timeout_ms, 10000))
+    except Exception:
+        pass
+    try:
+        # Angular завершает отрисовку после загрузки данных.
+        page.wait_for_function(
+            "() => { const get = window.getAllAngularTestabilities;"
+            " return !get || get().every((item) => item.isStable()); }",
+            timeout=min(timeout_ms, 8000),
+        )
     except Exception:
         pass
     page.evaluate("document.fonts ? document.fonts.ready.then(() => true) : true")
@@ -276,7 +303,10 @@ def cmd_capture(args):
 
         final = urlparse(page.url)
         requested = urlparse(args.url)
-        if LOGIN_PATH.search(final.path) and not LOGIN_PATH.search(requested.path):
+        # Angular с HashLocationStrategy хранит маршрут после символа #.
+        on_login = LOGIN_PATH.search(final.path) or LOGIN_PATH.search(final.fragment)
+        asked_login = LOGIN_PATH.search(requested.path) or LOGIN_PATH.search(requested.fragment)
+        if on_login and not asked_login:
             browser.close()
             fail("Страница требует вход", code=3, needs_login=True, final_url=page.url)
 
@@ -318,6 +348,7 @@ def cmd_capture(args):
             "png": str(png),
             "json": str(data_file),
             "status": data["status"],
+            "framework": data["framework"],
             "page": data["page"],
             "elements": len(data["elements"]),
             "truncated": data["truncated"],
